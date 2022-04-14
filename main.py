@@ -15,6 +15,7 @@ class FeatureSelection:
         TODO: Add the class docstring.
     '''
 
+    selected_features = None
 
     supported_error_metrics = {
         'regression_metrics': ['mae'],
@@ -28,13 +29,19 @@ class FeatureSelection:
         x_vars,
         y_var,
         error_metric,
-        test_size=0.30
+        # test_size=0.30
     ):
         self.df = df
         self.x_vars = x_vars
         self.y_var = y_var
-        self.test_size = test_size
+        # self.test_size = test_size
         self.error_metric = error_metric
+
+
+        assert error_metric in (
+            self.supported_error_metrics["regression"]
+            + self.supported_error_metrics["classification"]
+        ), f'The error_metric "{error_metric}" is not supported\n The supported metrics are: {self.supported_error_metrics}'
 
 
     def split_data_train_test(self, subset=None):
@@ -79,7 +86,7 @@ class FeatureSelection:
             vc_rsquare.groupby(["Cluster"]).head(top_n_features).reset_index()
         )
 
-        seleted_features = set(top_n_variables["Variable"])
+        self.seleted_features = set(top_n_variables["Variable"])
 
 
     @staticmethod
@@ -97,7 +104,7 @@ class FeatureSelection:
         return feature_importance
 
 
-    def remove_zero_imporances(self, subset=None, verbose=True):
+    def remove_zero_importances(self, subset=None, verbose=True):
         '''
             TODO: Add method docsting.
         '''
@@ -111,9 +118,9 @@ class FeatureSelection:
         elif self.error_metric in self.supported_error_metrics['classification']:
             estimator = xgb.XGBClassifier(seed=1024)
 
-        x_train, x_test, y_train, y_test = self.split_data_train_test(subset=required_cols)
+        # x_train, x_test, y_train, y_test = self.split_data_train_test(subset=required_cols)
 
-        base_model = estimator.fit(self.x_train, self.y_train)
+        base_model = estimator.fit(self.df[required_cols], self.df[self.y_var])
 
         feature_importance = self.clean_feature_importance(
             estimator=estimator, variable_names=self.x_train.columns
@@ -123,7 +130,7 @@ class FeatureSelection:
             if feature_importance['feature_importance'].min() == 0:
                 feature_importance = feature_importance[feature_importance['feature_importance']>0]
                 selected_features = feature_importance['variables'].tolist()
-                base_model = estimator.fit(x_train[selected_features], y_train)
+                base_model = estimator.fit(self.df[selected_features], self.df[self.y_var])
                 feature_importance = self.clean_feature_importance(
                     estimator=estimator, variable_names=self.x_train.columns
                 )
@@ -133,3 +140,7 @@ class FeatureSelection:
         feature_importance = self.clean_feature_importance(
             estimator=estimator, variable_names=self.x_train.columns
         )
+        feature_importance = feature_importance[feature_importance['feature_importance']>0]
+        self.selected_features = feature_importance['variables'].tolist()
+
+        return feature_importance['variables'].tolist()
