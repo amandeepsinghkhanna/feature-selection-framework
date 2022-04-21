@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import xgboost as xgb
+from tqdm import tqdm
 from varclushi import VarClusHi
 from sklearn.metrics import mean_absolute_error
 from sklearn.model_selection import GridSearchCV
@@ -131,41 +132,47 @@ def select_var_importance(
 ):
     if column_subset != None:
         x_train = x_train[column_subset]
+        x_test = x_test[column_subset]
 
-    model_features = x_train.columns
-
+    selected_features = list(x_train.columns)
+    model_features = selected_features
     estimator = xgb.XGBRegressor(seed=1024)
-    base_model = estimator.fit(x_train, y_train)
-
-    thresholds = np.sort(base_model.feature_importances_)
+    selection_model = estimator.fit(x_train, y_train)
+    base_model = selection_model
+    thresholds = np.sort(selection_model.feature_importances_)
+    
     output = []
-
+    
     for threshold in thresholds:
-        selection = SelectFromModel(base_model, threshold=threshold, prefit=True)
+        selection = SelectFromModel(selection_model, threshold=threshold, prefit=True)
         selected_x_train = selection.transform(x_train)
         selection_model = xgb.XGBRegressor(seed=1024)
         selection_model.fit(selected_x_train, y_train)
         selected_x_test = selection.transform(x_test)
         y_pred = selection_model.predict(selected_x_test)
-        selected_error = mean_absolute_error(selected_x_test, y_pred)
+        selected_error = mean_absolute_error(y_test, y_pred)
         temp_df = pd.DataFrame({
             "THRESHOLD": [threshold],
             "VARIABLE_COUNT": [selected_x_train.shape[1]],
             "ERROR": [selected_error]
         })
         output.append(temp_df)
-
-        output = pd.merge(
-            right=pd.concat(output, axis=0).reset_index(drop=True),
-            left=clean_feature_importance(base_model, model_features),
-            how='outer',
-            left_index=True,
-            right_index=True
-        ).drop(columns=['THRESHOLD', 'VARIABLE_COUNT'])
-
-        selected_features = set(output.loc[
-            output['THRESHOLD']>=output['THRESHOLD'].min()
-        ]['VARIABLE_NAME'])
+    
+    output = pd.merge(
+        right=pd.concat(output, axis=0).reset_index(drop=True),
+        left=clean_feature_importance(base_model, model_features),
+        how='outer',
+        left_index=True,
+        right_index=True
+    ).drop(columns=['THRESHOLD', 'VARIABLE_COUNT'])
+    
+    selected_threshold = (
+        output['FEATURE_IMPORTANCE'][output['ERROR']==output['ERROR'].min()].iloc[0]
+    )
+    
+    selected_features = set(output.loc[
+        output['FEATURE_IMPORTANCE']>=selected_threshold
+    ]['VARIABLE_NAME'])
 
     return list(selected_features), output
 
@@ -175,7 +182,7 @@ def select_best_model(
     x_test,
     y_test,
     parameter_grid={
-        'objective': ['reg:linear'],
+        'objective': ['reg:squarederror'],
         'learning_rate': [0.03, 0.05, 0.07]
     },
     column_subset=None,
@@ -189,7 +196,7 @@ def select_best_model(
 
     gridsearch = GridSearchCV(
         estimator=estimator,
-        parameters=parameter_grid,
+        param_grid=parameter_grid,
         cv=k_cv,
         n_jobs=-1,
         verbose=True
