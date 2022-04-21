@@ -1,23 +1,13 @@
 import pandas as pd
 import numpy as np
-from sqlalchemy import column
 import xgboost as xgb
 from varclushi import VarClusHi
+from sklearn.metrics import mean_absolute_error
 from sklearn.model_selection import GridSearchCV
 from sklearn.feature_selection import SelectFromModel
-from sklearn.model_selection import mean_absolute_error
+from sklearn.feature_selection import VarianceThreshold
 
-def clean_feature_importance(estimator, variable_names):
-    feature_importance = (
-        pd.DataFrame({
-            'VARIABLE_NAME': variable_names,
-            'FEATURE_IMPORTANCE': estimator.feature_importances_
-        }).sort_values(by=['FEATURE_IMPORTANCE'], ascending=True)
-        .reset_index(drop=True)
-    )
-    return feature_importance
-
-def filter_miss_class_rate(df, threshold=0.15):
+def filter_missing_rate(df, threshold=0.15):
     missing_report = (
         df
         .isnull()
@@ -30,9 +20,17 @@ def filter_miss_class_rate(df, threshold=0.15):
         )
     )
     required_columns = missing_report['VARIABLE_NAME'][
-        missing_report['MISSING_PERCENTAGE']>=threshold
+        missing_report['MISSING_PERCENTAGE']<=threshold
     ]
     return required_columns, df[required_columns]
+
+def filter_constant_columns(df, threshold=0.05):
+    constant_filter = VarianceThreshold(threshold=threshold).fit(df)
+    filtered_df = pd.DataFrame(
+        constant_filter.transform(df),
+        columns=constant_filter.get_feature_names_out()
+    )
+    return constant_filter.get_feature_names_out(), filtered_df
 
 def cluster_variables(
     df,
@@ -41,33 +39,42 @@ def cluster_variables(
     max_clus=None,
     column_subset=None
 ):
-    if column_subset == None:
+    if column_subset is None:
         variable_cluster_obj = VarClusHi(
             df,
-            maxeigenval2=maxeigenval2,
-            max_clus=max_clus
+            maxeigval2=maxeigenval2,
+            maxclus=max_clus
         )
     else:
         variable_cluster_obj = VarClusHi(
             df[column_subset],
-            maxeigenval2=maxeigenval2,
-            max_clus=max_clus
+            maxeigval2=maxeigenval2,
+            maxclus=max_clus
         )
-    variable_cluster_model = variable_cluster_obj()
 
-    variable_cluster_info = variable_cluster_model.info()
+    variable_cluster_model = variable_cluster_obj.varclus()
+    
     vc_rsquare = variable_cluster_model.rsquare
     vc_rsquare.sort_values(
         by=["Cluster", "RS_Own"], ascending=False, inplace=True
     )
-
     top_n_variables = (
         vc_rsquare.groupby(["Cluster"]).head(top_n_features).reset_index()
     )
 
-    seleted_features = set(top_n_variables["Variable"])
+    selected_features = list(set(top_n_variables["Variable"]))
 
-    return seleted_features, vc_rsquare
+    return selected_features, vc_rsquare
+
+def clean_feature_importance(estimator, variable_names):
+    feature_importance = (
+        pd.DataFrame({
+            'VARIABLE_NAME': variable_names,
+            'FEATURE_IMPORTANCE': estimator.feature_importances_
+        }).sort_values(by=['FEATURE_IMPORTANCE'], ascending=True)
+        .reset_index(drop=True)
+    )
+    return feature_importance
 
 def remove_zero_importances_regression(
     x_train,
@@ -87,12 +94,14 @@ def remove_zero_importances_regression(
         variable_names = x_train.columns
     )
 
+    selected_features = feature_importance['VARIABLE_NAME'].to_list()
+    
     required_columns = x_train.columns
 
     for variable_index in range(len(required_columns)):
         if feature_importance['FEATURE_IMPORTANCE'].min() == 0:
             feature_importance = feature_importance[feature_importance['FEATURE_IMPORTANCE']>0]
-            selected_features = feature_importance['variables'].tolist()
+            selected_features = feature_importance['VARIABLE_NAME'].tolist()
             base_model = estimator.fit(x_train[selected_features], y_train)
             feature_importance = clean_feature_importance(
                 estimator=base_model,
@@ -107,7 +116,7 @@ def remove_zero_importances_regression(
     )
 
     feature_importance = feature_importance[feature_importance['FEATURE_IMPORTANCE']>0]
-    selected_features = feature_importance['variables'].tolist()
+    selected_features = feature_importance['VARIABLE_NAME'].tolist()
 
     print(feature_importance)
 
